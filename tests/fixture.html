@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>nodes-Manager 夹具</title>
+<style>
+  body { margin: 0; font: 14px sans-serif; background: #1e1e1e; color: #ddd; }
+  /* 复刻 1.49.6 顶部按钮条：shrink-to-fit 的 flex 行 */
+  .actionbar-container { display: flex; align-items: center; gap: 8px; padding: 4px; }
+  button { display: inline-flex; align-items: center; gap: 4px; font-size: 14px; }
+  i { font-style: normal; font-size: 16px; }
+  .side-tool-bar-container { display: flex; flex-direction: column; width: 44px; }
+</style>
+</head>
+<body>
+
+<!-- 按真实结构搭：插件按钮埋在两层包装里，包装层只有 Tailwind 原子类 -->
+<div class="actionbar-container">
+  <div class="shrink-0">
+    <button class="p-button p-component"><i class="pi pi-sort-numeric-down"></i><span>Compact IDs</span></button>
+    <button class="p-button"><i class="pi pi-cog"></i></button>
+  </div>
+
+  <div class="[&amp;:not(:has(*&gt;*:not(:empty)))]:hidden">
+    <div class="flex gap-2 mx-2">
+      <button class="comfy-button">NAIBA</button>
+      <button class="comfyui-menu-mobile-collapse">🎈授权管理</button>
+      <div class="promptmanager-top-button-group"><button><i class="mdi mdi-note-text"></i>PM</button></div>
+      <button aria-label="应用管理器"><i class="mdi mdi-apps"></i><span>应用管理器</span></button>
+      <button title="资产库"><svg width="16" height="16"><rect width="16" height="16"/></svg><span>资产库</span></button>
+    </div>
+  </div>
+
+  <!-- 文字带数字、每秒变的监控条：签名必须归一化掉数字，否则 id 天天变 -->
+  <div class="is-horizontal is-dock-top">
+    <span class="dasiwa-monitor-metric cpu"><span>CPU</span><strong>45%</strong></span>
+    <span class="dasiwa-monitor-metric ram"><span>RAM</span><strong>71%</strong></span>
+  </div>
+
+  <!-- 毫无特征的裸 div：应被判为 id 不稳定 -->
+  <div><div></div></div>
+</div>
+
+<div class="side-tool-bar-container">
+  <button aria-label="节点库"><i class="pi pi-box"></i></button>
+  <button aria-label="模型库"><i class="pi pi-database"></i></button>
+</div>
+
+<pre id="out" style="padding:8px;white-space:pre-wrap"></pre>
+
+<script type="module">
+import { scanUI, toPayload, ZONE_BY_ID } from "../web/nm_zones.js";
+import { applyCSS, markAll, renderCSS, MARK_ATTR, highlight } from "../web/nm_style.js";
+
+const log = [];
+const ok = (cond, msg) => log.push((cond ? "PASS " : "FAIL ") + msg);
+
+// ---- 1. 扫描 ----
+const r1 = scanUI();
+const bar = r1.items.filter(i => i.zone === "actionbar");
+const rail = r1.items.filter(i => i.zone === "rail");
+ok(bar.length >= 8, `顶栏扫到 ${bar.length} 个条目（期望 ≥8）`);
+ok(rail.length === 2, `竖栏扫到 ${rail.length} 个（期望 2）`);
+ok(r1.zones.find(z => z.id === "actionbar").present, "actionbar 区域应判定为存在");
+ok(!r1.zones.find(z => z.id === "bodyTop").present, "不存在的区域应判定为不存在");
+
+// 埋在两层包装里的按钮要能扫到
+const naiba = bar.find(i => i.label === "NAIBA");
+ok(!!naiba, "应扫到两层包装里的 NAIBA 按钮");
+
+// 无特征裸 div 要被标成不稳定
+ok(bar.some(i => i.stable === false), "无特征的裸 div 应标记 stable=false");
+// 有特征的不该被误判
+ok(naiba && naiba.stable === true, "有文字的按钮应是 stable=true");
+
+// 图标/文字探测
+const compact = bar.find(i => /Compact IDs/.test(i.label));
+ok(compact && compact.hasIcon && compact.hasText, "Compact IDs 应同时有图标和文字");
+const gear = bar.find(i => i.cls.includes("p-button") && !i.hasText);
+ok(!!gear, "纯图标按钮应被识别为 hasText=false");
+const svgBtn = bar.find(i => /资产库/.test(i.label));
+ok(svgBtn && svgBtn.hasIcon, "svg 也要算图标");
+
+// ---- 2. 签名稳定性：数字要被归一化 ----
+const cpu1 = r1.items.find(i => /CPU/.test(i.label));
+document.querySelector(".dasiwa-monitor-metric.cpu strong").textContent = "93%";
+const r2 = scanUI();
+const cpu2 = r2.items.find(i => /CPU/.test(i.label));
+ok(cpu1 && cpu2 && cpu1.key === cpu2.key,
+   `监控条数字变了签名要不变\n     旧=${cpu1?.key}\n     新=${cpu2?.key}`);
+
+// 同一份 DOM 扫两次，签名集合要完全一致
+const set1 = r1.items.map(i => i.key).sort().join("\n");
+const set3 = scanUI().items.map(i => i.key).sort().join("\n");
+ok(set1 === set3, "同一 DOM 扫两次签名集合应一致");
+
+// ---- 3. 打标 ----
+markAll(r2.items);
+const marked = document.querySelectorAll(`[${MARK_ATTR}]`).length;
+ok(marked === r2.items.length, `打标 ${marked} 个 / 条目 ${r2.items.length} 个`);
+// 幂等
+markAll(scanUI().items);
+ok(document.querySelectorAll(`[${MARK_ATTR}]`).length === marked, "重复打标不应增加节点数");
+
+// ---- 4. CSS 生效（真实计算样式）----
+const zonesById = {};
+for (const [id, z] of Object.entries(ZONE_BY_ID)) zonesById[id] = { root: z.root };
+
+const target = bar.find(i => /应用管理器/.test(i.label));
+const cfg = {
+  global: { enabled: true, gap: 3, fontSize: 12, iconSize: 13, wrap: true },
+  items: {
+    [naiba.key]: { hidden: true },
+    [target.key]: { iconOnly: true, iconSize: 22 },
+    [compact.key]: { width: 40, order: -5, fontSize: 10 },
+    [rail[0].key]: { labelOnly: true },
+  },
+};
+applyCSS(renderCSS(cfg, zonesById));
+
+const cs = (el) => getComputedStyle(el);
+ok(cs(naiba.el).display === "none", "隐藏应真的 display:none");
+const tIcon = target.el.querySelector("i");
+ok(Math.round(parseFloat(cs(tIcon).fontSize)) === 22, `图标字号应为 22，实得 ${cs(tIcon).fontSize}`);
+ok(cs(target.el.querySelector("span")).display === "none", "只留图标应把 span 藏掉");
+ok(Math.round(parseFloat(cs(compact.el).width)) === 40, `宽度应为 40，实得 ${cs(compact.el).width}`);
+ok(cs(compact.el).order === "-5", `order 应为 -5，实得 ${cs(compact.el).order}`);
+ok(cs(rail[0].el.querySelector("i")).display === "none", "只留文字应把图标藏掉");
+// 全局：折行要求容器有确定宽度，否则 wrap 永不触发
+ok(cs(document.querySelector(".actionbar-container")).flexWrap === "wrap", "全局折行应生效");
+ok(Math.round(parseFloat(cs(document.querySelector(".actionbar-container")).columnGap)) === 3, "全局间距应生效");
+
+// 总开关关掉后不应残留任何规则
+applyCSS(renderCSS({ ...cfg, global: { ...cfg.global, enabled: false } }, zonesById));
+ok(cs(naiba.el).display !== "none", "总开关关闭后隐藏应失效");
+
+// ---- 5. 首屏兜底规则（不依赖打标）----
+applyCSS(renderCSS(cfg, zonesById));
+document.querySelectorAll(`[${MARK_ATTR}]`).forEach(e => e.removeAttribute(MARK_ATTR));
+const pm = document.querySelector(".promptmanager-top-button-group");
+const cfg2 = { global: { enabled: true }, items: { "actionbar|c:promptmanager-top-button-group": { hidden: true } } };
+applyCSS(renderCSS(cfg2, zonesById));
+ok(cs(pm).display === "none", "有专属 class 的条目应能靠兜底规则在打标前就藏住");
+
+// ---- 6. 悬停高亮 ----
+markAll(scanUI().items);
+applyCSS(renderCSS({ global: { enabled: true }, items: {} }, zonesById));
+highlight(compact.key);
+ok(cs(compact.el).outlineStyle === "solid", "悬停高亮应画出描边");
+highlight(null);
+ok(cs(compact.el).outlineStyle !== "solid", "取消高亮应撤掉描边");
+
+// ---- 7. 签名不许撞：每个条目一个 el，每个 el 一个 key ----
+const all7 = scanUI().items;
+const keyCount = new Map();
+for (const it of all7) keyCount.set(it.key, (keyCount.get(it.key) || 0) + 1);
+const dup = [...keyCount].filter(([, n]) => n > 1);
+ok(dup.length === 0, `签名不应重复，重复的：${dup.map(([k, n]) => k + "×" + n).join(" | ")}`);
+// 打标后每个 data-nm-id 只能命中一个元素，否则调一个会连带影响另一个
+markAll(all7);
+const multi = all7.filter(it => document.querySelectorAll(`[${MARK_ATTR}="${CSS.escape(it.key).replace(/\\/g,'\\\\')}"]`).length > 1);
+ok(multi.length === 0, `每个标记应只命中一个元素，串了 ${multi.length} 个`);
+
+// 外层包装 div 与它里面的唯一按钮必须是两个不同条目
+const shrinkDiv = all7.find(i => i.tag === "div" && i.depth === 1 && /Compact IDs/.test(i.label));
+const compactBtn = all7.find(i => i.tag === "button" && /Compact IDs/.test(i.label));
+ok(shrinkDiv && compactBtn && shrinkDiv.key !== compactBtn.key,
+   "包装 div 和内部按钮应有不同签名");
+// 藏内部按钮不该把外层 div 一起藏掉
+applyCSS(renderCSS({ global: { enabled: true }, items: { [compactBtn.key]: { hidden: true } } }, zonesById));
+ok(cs(compactBtn.el).display === "none", "藏按钮应生效");
+ok(cs(shrinkDiv.el).display !== "none", "藏内部按钮不应把外层包装一起藏掉");
+
+// ---- 8. 上报载荷 ----
+const pay = toPayload(scanUI().items);
+ok(pay.every(p => p.id && p.zone && !("el" in p)), "上报载荷应只含 id/label/zone，不带 DOM 引用");
+
+document.getElementById("out").textContent = log.join("\n");
+window.__result = { pass: log.filter(l => l.startsWith("PASS")).length,
+                    fail: log.filter(l => l.startsWith("FAIL")).length, log };
+</script>
+</body>
+</html>
