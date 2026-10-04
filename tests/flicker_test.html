@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>nodes-Manager 闪烁回归测试</title>
+<style>
+  body { margin: 0; font: 14px sans-serif; background: #1e1e1e; color: #ddd; }
+  .actionbar-container { display: flex; align-items: center; gap: 8px; padding: 4px; }
+  button { display: inline-flex; align-items: center; gap: 4px; font-size: 14px; }
+</style>
+</head>
+<body>
+
+<div class="actionbar-container">
+  <div class="flex gap-2 mx-2">
+    <button class="comfy-button">NAIBA</button>
+    <button class="comfy-button">按钮B</button>
+  </div>
+</div>
+
+<pre id="out" style="padding:8px;white-space:pre-wrap"></pre>
+
+<!--
+  复现「页面一直闪烁」的根因与修复：
+
+  插件的 CSS 全按 data-nm-id 属性选，标记是扫描时打上去的。插件整块重建
+  自己的按钮组时（监控条每次刷新都是），元素一换新标记就丢了 —— 若过几百
+  毫秒才补上，隐藏的按钮会先恢复显示再被藏回去，页面就一直闪。
+
+  修复后的时序：MutationObserver 回调是微任务，跑在下一帧绘制之前，
+  在回调里同步补标，重建的元素来不及以原始样式露脸。
+  本页模拟「配置隐藏 → 元素被重建」的全过程，验证三个时机点全是隐藏态。
+-->
+<script type="module">
+import { scanUI, ZONE_BY_ID } from "../web/nm_zones.js";
+import { applyCSS, markAll, renderCSS } from "../web/nm_style.js";
+
+const log = [];
+const ok = (cond, msg) => log.push((cond ? "PASS " : "FAIL ") + msg);
+
+const zonesById = {};
+for (const [id, z] of Object.entries(ZONE_BY_ID)) zonesById[id] = { root: z.root };
+
+const naiba = [...document.querySelectorAll("button")].find(b => b.textContent === "NAIBA");
+const parent = naiba.parentElement;
+
+// 1. 配置隐藏 + 打标（quickPass 的稳定状态）
+const cfg = { global: { enabled: true }, items: {} };
+const key = scanUI({ light: true }).items.find((i) => i.el === naiba)?.key;
+cfg.items[key] = { hidden: true };
+markAll(scanUI({ light: true }).items);
+applyCSS(renderCSS(cfg, zonesById));
+ok(getComputedStyle(naiba).display === "none", "隐藏配置生效");
+
+// 2. 先注册观察（真实插件里 observer 早已在位），再模拟整块重建。
+// 重建必须是**全新元素**（真实插件重建不会带上我们的标记），
+// cloneNode 会连 data-nm-id 一起复制，那测的就是假流程。
+let markedInMicrotask = null;
+const mo = new MutationObserver(() => {
+  markAll(scanUI({ light: true }).items);
+  markedInMicrotask = getComputedStyle(clone).display === "none";
+});
+mo.observe(document.body, { childList: true, subtree: true });
+
+const clone = document.createElement("button");
+clone.className = "comfy-button";
+clone.textContent = "NAIBA";
+naiba.remove();
+parent.appendChild(clone);
+
+// 4. 跨过绘制帧再查：补标及时的话，重建的元素从未以显示态画出来过。
+// 后台标签页 rAF 不触发，与超时竞速，保证隐藏窗口里也能跑完。
+const nextFrame = new Promise((r) => {
+  requestAnimationFrame(() => requestAnimationFrame(r));
+  setTimeout(r, 300);
+});
+await nextFrame;
+ok(markedInMicrotask === true, "微任务里已补上标记（绘制前）");
+ok(getComputedStyle(clone).display === "none", "绘制帧之后仍是隐藏态");
+mo.disconnect();
+
+// 5. light 扫描不碰布局也能把 key 算对
+const fullKeys = scanUI().items.map((i) => i.key).sort().join();
+const lightKeys = scanUI({ light: true }).items.map((i) => i.key).sort().join();
+ok(fullKeys === lightKeys, "light 与完整扫描签名一致");
+
+applyCSS(renderCSS({ global: { enabled: true }, items: {} }, zonesById));
+
+const pass = log.filter((l) => l.startsWith("PASS")).length;
+const fail = log.filter((l) => l.startsWith("FAIL")).length;
+document.getElementById("out").textContent = log.join("\n");
+window.__result = { pass, fail, log };
+</script>
+</body>
+</html>

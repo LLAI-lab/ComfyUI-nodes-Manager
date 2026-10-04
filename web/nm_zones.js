@@ -158,7 +158,10 @@ function stableKey(el, zoneId, depth) {
 // 只取「看起来是一个按钮/控件」的元素，而不是每个 div 都列 —— 否则 500 个插件
 // 会扫出几千条。判据：是 button / 有 role=button / 是按钮组，
 // 或者是区域根的直接子元素（有些插件塞的是纯 div 容器）。
-function collect(zone) {
+// light = 后台补扫用的轻量模式：只算 key 打标，不测量不探测。
+// getBoundingClientRect 是扫描里唯一强制同步布局的动作，DOM 一变就来一遍的话
+// 整页都在抖；rect / hasIcon / hasText 只有面板展示用得到，补扫用不上。
+function collect(zone, light) {
   const root = document.querySelector(zone.root);
   if (!root) return { present: false, items: [] };
 
@@ -169,9 +172,9 @@ function collect(zone) {
     // 跳过我们自己注入的东西
     if (el.closest?.("[data-nm-self]")) return;
     seen.add(el);
-    const r = el.getBoundingClientRect();
+    const r = light ? null : el.getBoundingClientRect();
     const { key, stable } = stableKey(el, zone.id, depth);
-    const parts = probeParts(el);
+    const parts = light ? { icon: false, text: false } : probeParts(el);
     out.push({
       key,
       stable,
@@ -182,8 +185,8 @@ function collect(zone) {
       cls: Array.from(el.classList || []).slice(0, 6),
       hasIcon: parts.icon,
       hasText: parts.text,
-      rect: [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)],
-      visible: r.width > 0 && r.height > 0,
+      rect: light ? [0, 0, 0, 0] : [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)],
+      visible: light ? true : r.width > 0 && r.height > 0,
       el,
     });
   };
@@ -221,11 +224,13 @@ function collect(zone) {
 
 // 扫全部区域。返回 {zones: [...], items: [...]}；items 里带 el 引用，
 // 面板用它做「鼠标悬停高亮」，提交给后端前要剥掉。
-export function scanUI() {
+// 传 {light:true} 走轻量模式（不测量、不探测图标文字），供后台补扫使用。
+export function scanUI(opts) {
+  const light = !!opts?.light;
   const zones = [];
   const items = [];
   for (const zone of ZONES) {
-    const res = collect(zone);
+    const res = collect(zone, light);
     zones.push({
       id: zone.id,
       label: zone.label,

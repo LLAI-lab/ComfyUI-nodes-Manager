@@ -94,6 +94,11 @@ const set1 = r1.items.map(i => i.key).sort().join("\n");
 const set3 = scanUI().items.map(i => i.key).sort().join("\n");
 ok(set1 === set3, "同一 DOM 扫两次签名集合应一致");
 
+// light 模式（后台补扫用，不测量）算出的签名必须和完整扫描完全一致 ——
+// 不然后台打标的 key 和面板里看到的对不上
+const lightSet = scanUI({ light: true }).items.map(i => i.key).sort().join("\n");
+ok(lightSet === set1, "light 扫描与完整扫描的签名集合应一致");
+
 // ---- 3. 打标 ----
 markAll(r2.items);
 const marked = document.querySelectorAll(`[${MARK_ATTR}]`).length;
