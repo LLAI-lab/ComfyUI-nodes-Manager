@@ -107,6 +107,33 @@ ok(marked === r2.items.length, `打标 ${marked} 个 / 条目 ${r2.items.length}
 markAll(scanUI().items);
 ok(document.querySelectorAll(`[${MARK_ATTR}]`).length === marked, "重复打标不应增加节点数");
 
+// ---- 3.5 key 粘滞：文字漂移不换身份 ----
+// 监控条那类元素文字一直在变；key 若跟着变，隐藏规则永远追不上，
+// 实测表现就是隐藏项反复「闪现」。已打标的元素只差文字部分时必须沿用旧 key。
+const naibaItem = bar.find(i => i.label === "NAIBA");
+const known = new Set([naibaItem.key]);
+naibaItem.el.textContent = "NAIBA-文字变了";
+const rescanned = scanUI({ knownKeys: known });
+const pinned = rescanned.items.find(i => i.el === naibaItem.el);
+ok(pinned && pinned.key === naibaItem.key,
+   `文字漂移后应沿用旧 key\n     旧=${naibaItem.key}\n     新=${pinned?.key}`);
+// 新元素（没打过标）同基底时沿用配置里已有的 key —— 模拟插件整块重建：
+// 旧元素移除、新元素顶上，基底唯一，身份应当延续
+const origEl = naibaItem.el;
+const parentEl = origEl.parentElement;
+const newBtn = document.createElement("button");
+newBtn.className = "comfy-button";
+newBtn.textContent = "NAIBA";
+origEl.remove();
+parentEl.appendChild(newBtn);
+const adoptScan = scanUI({ knownKeys: known, light: true });
+const adoptItem = adoptScan.items.find(i => i.el === newBtn);
+ok(adoptItem && adoptItem.key === naibaItem.key, "重建后的新元素应沿用配置已有 key");
+// 还原 DOM（条目 key 与标记保持原样，后续断言继续用）
+newBtn.remove();
+parentEl.appendChild(origEl);
+origEl.textContent = "NAIBA";
+
 // ---- 4. CSS 生效（真实计算样式）----
 const zonesById = {};
 for (const [id, z] of Object.entries(ZONE_BY_ID)) zonesById[id] = { root: z.root };

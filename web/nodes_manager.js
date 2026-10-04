@@ -56,10 +56,12 @@ function cachedCSS() {
 
 // 轻扫：打标 + 必要时重注入 CSS。light 模式不测量（getBoundingClientRect
 // 会强制同步布局，每次 DOM 变更都来一遍整页都在抖）、不探测图标文字细节。
-// 打标是幂等的（属性值一样就不写），反复调没有副作用。
+// knownKeys 传配置里已有的 key：文字漂移的元素（监控条）按基底沿用旧身份，
+// 隐藏规则才能一直命中 —— 实测不粘住的话隐藏项每秒都要「闪现」几次。
 function quickPass() {
   if (!cfg) return null;
-  const { items } = scanUI({ light: true });
+  const known = Object.keys(cfg.items || {});
+  const { items } = scanUI({ light: true, knownKeys: known });
   markAll(items);
   applyCSS(cachedCSS());
   return items;
@@ -73,23 +75,37 @@ function scheduleReport() {
 
 // 上报本次扫到的条目，后端据此判断「哪些界面条目是新出现的」。
 // 只报没报过的，省得 DOM 每动一下就发一次全量。失败不影响调整。
+//
+// 服务端的响应里带**权威配置**：autoReveal=false 时新条目会被预置为隐藏。
+// 必须把它并回来重渲染，否则前端按启动时的旧配置打标，新隐藏项一直露着 ——
+// 只并入当前没有的 key，不碰面板里未保存的改动。
 async function reportSeen(items) {
   const fresh = (items || []).filter((it) => !reported.has(it.key));
   if (!fresh.length) return;
   for (const it of fresh) reported.add(it.key);
   try {
-    await api.fetchApi("/nodes_manager/seen", {
+    const res = await api.fetchApi("/nodes_manager/seen", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ found: toPayload(fresh) }),
     });
+    if (res.ok) {
+      const state = await res.json();
+      let changed = false;
+      for (const [k, v] of Object.entries(state.config?.items || {})) {
+        if (!cfg.items[k]) { cfg.items[k] = v; changed = true; }
+      }
+      if (changed) { cssForCfg = null; applyCSS(cachedCSS()); }
+    }
   } catch (err) {
     console.warn("[nodes-Manager] 条目上报失败（不影响界面调整）", err);
   }
 }
 
 async function loadConfig() {
-  const res = await api.fetchApi("/nodes_manager/state");
+  // no-store：浏览器可能把旧响应缓存到内存里，刷新后读到上一次的总开关
+  // 状态（实测发生过：服务端已是 enabled=true，页面刷出来还是关闭）
+  const res = await api.fetchApi("/nodes_manager/state", { cache: "no-store" });
   if (!res.ok) throw new Error(`GET /nodes_manager/state → HTTP ${res.status}`);
   const state = await res.json();
   cfg = state.config;

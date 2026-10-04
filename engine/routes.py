@@ -59,7 +59,9 @@ def register_routes():
 
     @instance.routes.get("/nodes_manager/state")
     async def _nm_state(request):
-        return web.json_response(state_payload())
+        # no-store：配置刚保存、页面马上刷新时，浏览器可能把旧响应留在内存缓存里，
+        # 前端就会拿上一次的总开关/条目状态渲染（实测发生过）
+        return web.json_response(state_payload(), headers={"Cache-Control": "no-store"})
 
     @instance.routes.post("/nodes_manager/config")
     async def _nm_config(request):

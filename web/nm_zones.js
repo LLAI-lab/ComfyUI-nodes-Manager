@@ -108,6 +108,13 @@ function cleanText(el) {
   return (el.textContent || "").replace(/\s+/g, " ").trim().slice(0, 60);
 }
 
+// key 的「基底」：把会漂的成分（文字内容、撞签名序号）归一成通配。
+// 监控条那类元素文字每秒都在变，若照原样进 key，隐藏规则永远追不上 ——
+// 实测同一元素会滚出 2-3 个变体 key，每个都露出过（这就是「页面一直闪」的主因之一）。
+function keyBase(key) {
+  return key.split("|").map((p) => (p.startsWith("t:") || p.startsWith("#")) ? p.slice(0, 2) + "*" : p).join("|");
+}
+
 // 给一个元素编一个**跨刷新稳定**的 id。
 //
 // 序号不稳定（实测插件加载顺序会变），所以优先用元素自带的稳定特征：
@@ -120,7 +127,6 @@ function stableKey(el, zoneId, depth) {
   // 算出来的 key 一模一样，打标时两个元素拿到同一个 data-nm-id，
   // 结果隐藏一个会把外层一起藏掉。深度还顺带让兜底选择器能锚对层级。
   const parts = ["g:" + el.tagName.toLowerCase(), "d:" + depth];
-
   // 1. 专属 class：排掉 Tailwind 原子类和框架通用类
   const own = Array.from(el.classList || []).filter((c) => {
     if (c.length < 4) return false;
@@ -161,7 +167,7 @@ function stableKey(el, zoneId, depth) {
 // light = 后台补扫用的轻量模式：只算 key 打标，不测量不探测。
 // getBoundingClientRect 是扫描里唯一强制同步布局的动作，DOM 一变就来一遍的话
 // 整页都在抖；rect / hasIcon / hasText 只有面板展示用得到，补扫用不上。
-function collect(zone, light) {
+function collect(zone, light, knownKeys) {
   const root = document.querySelector(zone.root);
   if (!root) return { present: false, items: [] };
 
@@ -174,9 +180,24 @@ function collect(zone, light) {
     seen.add(el);
     const r = light ? null : el.getBoundingClientRect();
     const { key, stable } = stableKey(el, zone.id, depth);
+    // **key 粘滞**：文字漂移不该换身份。
+    //   a) 元素已经打过标、且新旧 key 只差文字/序号 → 沿用旧 key；
+    //   b) 新元素、但配置里已有同基底 key（只差文字）→ 沿用配置那份
+    //      （用户已经调过的条目不因文字一变就「变新」）。
+    // 都不满足才用刚算出来的 —— 元素真的换了内容才换身份。
+    let finalKey = key;
+    const prev = el.getAttribute("data-nm-id");
+    if (prev && prev !== key && keyBase(prev) === keyBase(key)) {
+      finalKey = prev;
+    } else if (!prev && knownKeys) {
+      const base = keyBase(key);
+      for (const kk of knownKeys) {
+        if (keyBase(kk) === base) { finalKey = kk; break; }
+      }
+    }
     const parts = light ? { icon: false, text: false } : probeParts(el);
     out.push({
-      key,
+      key: finalKey,
       stable,
       zone: zone.id,
       depth,
@@ -224,13 +245,15 @@ function collect(zone, light) {
 
 // 扫全部区域。返回 {zones: [...], items: [...]}；items 里带 el 引用，
 // 面板用它做「鼠标悬停高亮」，提交给后端前要剥掉。
-// 传 {light:true} 走轻量模式（不测量、不探测图标文字），供后台补扫使用。
+// opts.light —— 后台补扫用，不测量不探测；
+// opts.knownKeys —— 配置里已有的 key 集合，新元素同基底时直接沿用（key 粘滞）。
 export function scanUI(opts) {
   const light = !!opts?.light;
+  const knownKeys = opts?.knownKeys || null;
   const zones = [];
   const items = [];
   for (const zone of ZONES) {
-    const res = collect(zone, light);
+    const res = collect(zone, light, knownKeys);
     zones.push({
       id: zone.id,
       label: zone.label,

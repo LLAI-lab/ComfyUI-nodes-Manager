@@ -39,17 +39,20 @@ export class Panel {
 
   // ---------- 数据 ----------
 
-  async fetchJSON(path, body) {
-    const opts = body === undefined
-      ? {}
-      : { method: "POST", body: JSON.stringify(body), headers: { "Content-Type": "application/json" } };
+  async fetchJSON(path, body, extra) {
+    let opts = extra || {};
+    if (body !== undefined) {
+      opts = { ...opts, method: "POST", body: JSON.stringify(body),
+               headers: { "Content-Type": "application/json", ...(opts.headers || {}) } };
+    }
     const res = await this.api.fetchApi(path, opts);
     if (!res.ok) throw new Error(`${path} → HTTP ${res.status}`);
     return res.json();
   }
 
   async load() {
-    const state = await this.fetchJSON(API.state);
+    // no-store：防止读到浏览器缓存的旧配置（总开关状态会因此「回退」）
+    const state = await this.fetchJSON(API.state, undefined, { cache: "no-store" });
     this.cfg = state.config;
     this.saved = JSON.parse(JSON.stringify(state.config));
     this.newPlugins = state.newPlugins || [];
@@ -60,7 +63,9 @@ export class Panel {
 
   // 扫 DOM，打标，把新条目报给后端
   async rescan() {
-    this.scan = scanUI();
+    // knownKeys：配置里已有的 key。文字漂移的元素（监控条）按基底沿用旧身份，
+    // 否则每漂一次就生成一个新条目，隐藏规则追不上（闪烁的根源之一）。
+    this.scan = scanUI({ knownKeys: Object.keys(this.cfg.items || {}) });
     markAll(this.scan.items);
     this.apply();
     try {
