@@ -28,11 +28,27 @@ _RUNTIME = {}
 SELF_NAME = os.path.basename(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
+def _find_loaded(name):
+    """找到插件已导入模块在 sys.modules 里的键，没导入返回 None。
+
+    ComfyUI 的装载器（nodes.load_custom_node）对目录插件用的键是
+    「完整路径把 . 换成 _x_」，不是文件夹名；个别插件也会用文件夹名
+    自注册，两个都试。
+    """
+    enabled, _ = _find_dirs(name)
+    if not enabled:
+        return None
+    for key in (enabled.replace(".", "_x_"), name):
+        if key in sys.modules:
+            return key
+    return None
+
+
 def hot_state(names):
     """面板展示用的运行时状态：插件是否已导入 / 是否被软停用。"""
     out = {}
     for n in names:
-        out[n] = {"loaded": n in sys.modules, "stripped": n in _RUNTIME}
+        out[n] = {"loaded": _find_loaded(n) is not None, "stripped": n in _RUNTIME}
     return out
 
 
@@ -43,7 +59,8 @@ def _comfy_nodes():
 
 def _strip(name):
     """把已导入插件的节点类从全局映射摘掉，返回摘掉的个数。"""
-    module = sys.modules.get(name)
+    loaded_key = _find_loaded(name)
+    module = sys.modules.get(loaded_key) if loaded_key else None
     classes = getattr(module, "NODE_CLASS_MAPPINGS", {}) or {}
     display = getattr(module, "NODE_DISPLAY_NAME_MAPPINGS", {}) or {}
     comfy = _comfy_nodes()
@@ -77,7 +94,7 @@ def _restore(name):
 
 def _register_web(module_path, name):
     """给热启用的插件补挂前端静态目录（正常装载是启动时挂的）。"""
-    module = sys.modules.get(name)
+    module = sys.modules.get(module_path.replace(".", "_x_")) or sys.modules.get(name)
     web = getattr(module, "WEB_DIRECTORY", None)
     if not (isinstance(web, str) and web):
         return False
@@ -102,12 +119,17 @@ def _import_full(module_path, name):
     if not os.path.isfile(init):
         return {"ok": False, "msg": "目录里没有 __init__.py，只能重启加载"}
     comfy = _comfy_nodes()
-    spec = importlib.util.spec_from_file_location(name, init)
+    # ComfyUI 对目录插件的 sys.modules 键是「路径把 . 换成 _x_」，保持一致，
+    # 这样之后的停用/恢复才能找到模块；文件夹名键也补一份便于插件内部自引用。
+    sys_key = module_path.replace(".", "_x_")
+    spec = importlib.util.spec_from_file_location(sys_key, init)
     module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
+    sys.modules[sys_key] = module
+    sys.modules.setdefault(name, module)
     try:
         spec.loader.exec_module(module)
     except Exception as err:
+        sys.modules.pop(sys_key, None)
         sys.modules.pop(name, None)
         return {"ok": False, "msg": "导入失败：%s" % err}
 
@@ -165,7 +187,7 @@ def toggle(name, enable):
         if name in _RUNTIME:
             n = _restore(name)
             msg = "已恢复：%d 个节点类放回" % n
-        elif name in sys.modules:
+        elif _find_loaded(name):
             msg = "模块本就处于载入状态，无需恢复"
         else:
             res = _import_full(enabled_dir or rec["path"], name)
@@ -185,7 +207,7 @@ def toggle(name, enable):
     if not enabled_dir:
         return {"ok": False, "msg": "这个插件已经处于停用状态"}
     stripped = 0
-    if name in sys.modules:
+    if _find_loaded(name):
         stripped = _strip(name)
     renamed, err = False, None
     try:
