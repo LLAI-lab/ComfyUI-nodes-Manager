@@ -32,8 +32,8 @@
   本页模拟「配置隐藏 → 元素被重建」的全过程，验证三个时机点全是隐藏态。
 -->
 <script type="module">
-import { scanUI, ZONE_BY_ID } from "../web/nm_zones.js";
-import { applyCSS, markAll, renderCSS } from "../web/nm_style.js";
+import { scanUI, ZONE_BY_ID } from "../web/nm_zones.js?v=7";
+import { applyCSS, markAll, renderCSS } from "../web/nm_style.js?v=7";
 
 const log = [];
 const ok = (cond, msg) => log.push((cond ? "PASS " : "FAIL ") + msg);

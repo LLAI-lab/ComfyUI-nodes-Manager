@@ -22,13 +22,17 @@
   </div>
 
   <div class="[&amp;:not(:has(*&gt;*:not(:empty)))]:hidden">
-    <div class="flex gap-2 mx-2">
-      <button class="comfy-button">NAIBA</button>
-      <button class="comfyui-menu-mobile-collapse">🎈授权管理</button>
-      <div class="promptmanager-top-button-group"><button><i class="mdi mdi-note-text"></i>PM</button></div>
-      <button aria-label="应用管理器"><i class="mdi mdi-apps"></i><span>应用管理器</span></button>
-      <button title="资产库"><svg width="16" height="16"><rect width="16" height="16"/></svg><span>资产库</span></button>
-    </div>
+  <div class="flex gap-2 mx-2">
+    <button class="comfy-button">NAIBA</button>
+    <button class="comfyui-menu-mobile-collapse">🎈授权管理</button>
+    <div class="promptmanager-top-button-group"><button><i class="mdi mdi-note-text"></i>PM</button></div>
+    <button aria-label="应用管理器"><i class="mdi mdi-apps"></i><span>应用管理器</span></button>
+    <button title="资产库"><svg width="16" height="16"><rect width="16" height="16"/></svg><span>资产库</span></button>
+    <!-- 两个按钮共享同一个特征类：藏其中一个时，兜底选择器会命中两个，
+         必须被「唯一命中」闸拦下，否则一藏藏一排 -->
+    <button class="nmtest-shared">共享A</button>
+    <button class="nmtest-shared">共享B</button>
+  </div>
   </div>
 
   <!-- 文字带数字、每秒变的监控条：签名必须归一化掉数字，否则 id 天天变 -->
@@ -46,13 +50,15 @@
   <button aria-label="模型库"><i class="pi pi-database"></i></button>
   <!-- 自己的页签按钮：永不扫描（被 autoReveal 吞掉就没有入口了） -->
   <button aria-label="ComfyUI-nodes-Manager：调整插件按钮的字号 / 图标 / 显隐 / 位置"><i class="pi pi-sliders-h"></i></button>
+  <!-- 结构性容器（区域根的直接子 div）：不给兜底规则，藏它等于藏整片 -->
+  <div class="nmtest-panel"><span>面板内容</span></div>
 </div>
 
 <pre id="out" style="padding:8px;white-space:pre-wrap"></pre>
 
 <script type="module">
-import { scanUI, toPayload, ZONE_BY_ID } from "../web/nm_zones.js";
-import { applyCSS, markAll, renderCSS, MARK_ATTR, highlight } from "../web/nm_style.js";
+import { scanUI, toPayload, ZONE_BY_ID } from "../web/nm_zones.js?v=7";
+import { applyCSS, markAll, renderCSS, MARK_ATTR, highlight } from "../web/nm_style.js?v=7";
 
 const log = [];
 const ok = (cond, msg) => log.push((cond ? "PASS " : "FAIL ") + msg);
@@ -62,7 +68,7 @@ const r1 = scanUI();
 const bar = r1.items.filter(i => i.zone === "actionbar");
 const rail = r1.items.filter(i => i.zone === "rail");
 ok(bar.length >= 8, `顶栏扫到 ${bar.length} 个条目（期望 ≥8）`);
-ok(rail.length === 2, `竖栏扫到 ${rail.length} 个（期望 2）`);
+ok(rail.length === 3, `竖栏扫到 ${rail.length} 个（期望 3：两个按钮 + 结构性容器）`);
 ok(r1.zones.find(z => z.id === "actionbar").present, "actionbar 区域应判定为存在");
 ok(!r1.zones.find(z => z.id === "bodyTop").present, "不存在的区域应判定为不存在");
 ok(!r1.items.some(i => (i.label || "").includes("ComfyUI-nodes-Manager")),
@@ -177,6 +183,38 @@ const pm = document.querySelector(".promptmanager-top-button-group");
 const cfg2 = { global: { enabled: true }, items: { "actionbar|c:promptmanager-top-button-group": { hidden: true } } };
 applyCSS(renderCSS(cfg2, zonesById));
 ok(cs(pm).display === "none", "有专属 class 的条目应能靠兜底规则在打标前就藏住");
+
+// 共享特征类：兜底会命中两个按钮 → 必须被「唯一命中」闸拦下，一个都不许藏
+const sharedA = [...document.querySelectorAll("button")].find(b => b.textContent === "共享A");
+const sharedB = [...document.querySelectorAll("button")].find(b => b.textContent === "共享B");
+const cssText = () => document.getElementById("nm-injected-style").textContent;
+const sharedKeyA = scanUI({ light: true }).items.find(i => i.el === sharedA)?.key;
+const cfgShared = { global: { enabled: true }, items: { [sharedKeyA]: { hidden: true } } };
+applyCSS(renderCSS(cfgShared, zonesById));
+// 注意：精确规则的 data-nm-id 值里本来就有类名，要查的是「兜底选择器形态」
+ok(!cssText().includes(".actionbar-container .nmtest-shared"),
+   "兜底选择器命中多个元素时必须整个放弃（共享类不许进 CSS）");
+ok(cs(sharedA).display !== "none" && cs(sharedB).display !== "none",
+   "兜底被拦后两个共享按钮都不该被藏");
+// 打标之后，精确规则只藏目标那一个
+markAll(scanUI({ light: true }).items);
+applyCSS(renderCSS(cfgShared, zonesById));
+ok(cs(sharedA).display === "none", "打标后精确规则应只藏共享A");
+ok(cs(sharedB).display !== "none", "打标后共享B不应被牵连");
+
+// 结构性容器（区域根的直接子 div）：不给兜底规则，藏它等于藏整片
+const panelDiv = document.querySelector(".nmtest-panel");
+const panelKey = scanUI({ light: true }).items.find(i => i.el === panelDiv)?.key;
+const cfgPanel = { global: { enabled: true }, items: { [panelKey]: { hidden: true } } };
+document.querySelectorAll(`[${MARK_ATTR}]`).forEach(e => e.removeAttribute(MARK_ATTR));
+applyCSS(renderCSS(cfgPanel, zonesById));
+ok(!cssText().includes(".side-tool-bar-container .nmtest-panel"),
+   "结构性容器不应生成兜底规则");
+ok(cs(panelDiv).display !== "none", "结构性容器打标前不应被兜底藏掉");
+markAll(scanUI({ light: true }).items);
+applyCSS(renderCSS(cfgPanel, zonesById));
+ok(cs(panelDiv).display === "none", "打标后结构性容器按精确规则隐藏");
+applyCSS(renderCSS({ global: { enabled: true }, items: {} }, zonesById));
 
 // ---- 6. 悬停高亮 ----
 markAll(scanUI().items);

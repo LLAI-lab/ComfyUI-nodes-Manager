@@ -122,33 +122,43 @@ function globalRules(g) {
 
 // 隐藏项的首屏兜底：在 JS 打标之前，用 :has() 按特征命中，压掉闪动。
 //
+// **必须过两道闸，否则会整片误杀**（实测「总开关一开左侧栏消失」就是它）：
+//   1. 结构性容器（区域根的直接子 div）不生成 —— 它的特征类是整片区域共用的，
+//      一条兜底就能把整条侧栏/按钮条藏掉；
+//   2. 生成后在当前 DOM 里验证**唯一命中**（querySelectorAll 长度恰为 1）——
+//      侧栏按钮的特征类（Tailwind 任意值类）整排共享，命中多个的兜底一律放弃。
 // 只对「隐藏」做，因为闪一下再消失最显眼。用得上的特征只有 aria-label / title /
 // 专属 class / 图标类名 —— 文字内容 CSS 选不了，那种就只能等打标。
 // :has() 在 Chrome 105+ 支持，ComfyUI 的目标浏览器都有。
-function hideFallback(key, zoneRoot) {
+function hideFallbackParts(key, zoneRoot) {
   const bits = key.split("|").slice(1);
-  // key 里的 g: 段是元素自己的标签名。图标特征那条必须锚在它上面 ——
-  // 图标类名长在子元素上，用 :has() 回选时若一律写 button，就会选到
-  // 「包着这个按钮的 div」以外的东西，或者反过来选不中 div 本体（实测
-  // .actionbar-container > div.shrink-0 里只有一个按钮时就是这种情况）。
-  const tag = (bits.find((b) => b.startsWith("g:")) || "g:*").slice(2) || "*";
   // 撞签名补的 |#n 序号没法写进选择器，这类条目不做兜底，等打标
-  if (bits.some((b) => b.startsWith("#"))) return null;
+  if (bits.some((b) => b.startsWith("#"))) return [];
+  const tag = (bits.find((b) => b.startsWith("g:")) || "g:*").slice(2) || "*";
+  // 闸 1：结构性容器（区域根的直接子 div）。
+  // key 里的 g: 段是元素自己的标签名、d: 段是相对区域根的深度。
+  if (bits.includes("d:1") && bits.some((b) => b.startsWith("g:div"))) return [];
+  const out = [];
   for (const p of bits) {
     const val = p.slice(2);
     if (!val) continue;
-    if (p.startsWith("i:")) return `${zoneRoot} #${cssIdent(val)}`;
-    if (p.startsWith("a:")) return `${zoneRoot} [aria-label="${esc(val)}"],${zoneRoot} [title="${esc(val)}"]`;
+    if (p.startsWith("i:")) { out.push(`${zoneRoot} #${cssIdent(val)}`); return out; }
+    if (p.startsWith("a:")) {
+      out.push(`${zoneRoot} [aria-label="${esc(val)}"]`, `${zoneRoot} [title="${esc(val)}"]`);
+      return out;
+    }
     if (p.startsWith("c:")) {
       const cls = val.split(".").filter(Boolean).map(cssIdent).map((c) => "." + c).join("");
-      if (cls) return `${zoneRoot} ${cls}`;
+      if (cls) out.push(`${zoneRoot} ${cls}`);
+      return out;
     }
     if (p.startsWith("k:")) {
       const cls = val.split(".").filter(Boolean).map(cssIdent).map((c) => "." + c).join("");
-      if (cls) return `${zoneRoot} ${tag}:has(${cls})`;
+      if (cls) out.push(`${zoneRoot} ${tag}:has(${cls})`);
+      return out;
     }
   }
-  return null;
+  return out;
 }
 
 // class / id 里可能有 CSS 标识符非法字符，转义一下（CSS.escape 会把开头数字等处理掉）
@@ -178,8 +188,14 @@ export function renderCSS(cfg, zonesById) {
       const zoneId = key.split("|")[0];
       const root = zonesById?.[zoneId]?.root;
       if (root) {
-        const fb = hideFallback(key, root);
-        if (fb) fallbacks.push(fb);
+        // 闸 2：唯一命中才给兜底。多命中的特征类是共享的，藏下去就是一整排。
+        for (const sel of hideFallbackParts(key, root)) {
+          try {
+            if (document.querySelectorAll(sel).length === 1) fallbacks.push(sel);
+          } catch {
+            /* 选择器非法（怪类名等）就放弃兜底，等打标 */
+          }
+        }
       }
     }
   }

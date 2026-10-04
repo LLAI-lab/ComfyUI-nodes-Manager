@@ -256,8 +256,15 @@ def merge_seen(cfg, found):
                      "zone": str(rec.get("zone", ""))[:60]}
         fresh.append(key)
         if not cfg["global"].get("autoReveal", True):
-            item = cfg["items"].setdefault(key, dict(ITEM_FIELDS))
-            item["hidden"] = True
+            # 结构性容器（区域根的直接子 div）不做预置隐藏 —— 藏它等于藏整片
+            # 区域，实测侧栏滚动容器被预置隐藏后，总开关一开左侧栏整个消失。
+            # 手动到面板里隐藏仍然允许，这里只拦「自动」。
+            parts = key.split("|")
+            structural = (any(p.startswith("g:div") for p in parts)
+                          and any(p == "d:1" for p in parts))
+            if not structural:
+                item = cfg["items"].setdefault(key, dict(ITEM_FIELDS))
+                item["hidden"] = True
     return fresh
 
 

@@ -45,11 +45,16 @@ function zonesById() {
 
 // CSS 只随 cfg 重渲染。cfg 只在面板保存 / 撤销时整体换引用，比较引用即可，
 // 不必每轮扫描都把几百条规则重新拼一遍字符串。
+// 但兜底规则的「唯一命中」验证依赖当前 DOM —— 启动时区域根还不存在，验证
+// 全是零命中；挂载后必须重渲染一次才带上兜底。用「区域是否已出现」做失效信号。
 let cssForCfg = null;
 let cssCache = "";
+let cssZonesAbsent = true;
 function cachedCSS() {
-  if (cssForCfg !== cfg) {
+  const absent = !document.querySelector(".actionbar-container,.side-tool-bar-container");
+  if (cssForCfg !== cfg || absent !== cssZonesAbsent) {
     cssForCfg = cfg;
+    cssZonesAbsent = absent;
     cssCache = renderCSS(cfg, zonesById());
   }
   return cssCache;
