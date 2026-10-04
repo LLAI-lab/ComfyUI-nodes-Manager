@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>nodes-Manager 面板冒烟测试</title>
+</head>
+<body>
+
+<div class="actionbar-container">
+  <button class="comfy-button">测试按钮A</button>
+</div>
+<div class="side-tool-bar-container">
+  <button aria-label="节点库"><i class="pi pi-box"></i></button>
+</div>
+<pre id="out" style="padding:8px;white-space:pre-wrap"></pre>
+<script>
+// 模块内的未捕获异常不会进 __result，先抓到 out 里
+window.addEventListener("error", (e) => {
+  document.getElementById("out").textContent += "ERR " + e.message + "\n";
+});
+window.addEventListener("unhandledrejection", (e) => {
+  document.getElementById("out").textContent += "REJ " + String(e.reason && e.reason.stack || e.reason).slice(0, 400) + "\n";
+});
+</script>
+
+<!--
+  面板冒烟测试：桩掉 api（不联网），真实挂载 Panel 走完整 boot→render。
+  面板类没有独立测试时，一个变量遮蔽（const btn = btn(...) 的 TDZ）就
+  能让整个面板「加载失败」，页面右键入口形同虚设 —— 那种错必须在这里
+  先炸出来。
+-->
+<script type="module">
+import { Panel } from "../web/nm_panel.js?v=8";
+
+const log = [];
+const ok = (cond, msg) => log.push((cond ? "PASS " : "FAIL ") + msg);
+
+const state = {
+  version: 1,
+  config: {
+    version: 1,
+    global: { enabled: true, scale: null, gap: null, fontSize: null, iconSize: null, wrap: false, autoReveal: true },
+    items: { "actionbar|g:button|d:1|t:测试按钮A": { hidden: true, fontSize: null, iconSize: null, labelOnly: false, iconOnly: false, order: null, zone: null, width: null, note: "" } },
+    seen: {}, plugins: {},
+  },
+  plugins: [
+    { name: "FakePlugA", path: "C:/x/FakePlugA", disabled: false, web: "web", mtime: 0 },
+    { name: "FakePlugB", path: "C:/x/FakePlugB.disabled", disabled: true, web: "", mtime: 0 },
+    { name: "FakePlugC", path: "C:/x/FakePlugC", disabled: false, web: "", mtime: 0 },
+  ],
+  newPlugins: [],
+  gonePlugins: [],
+  hot: { FakePlugA: { loaded: true, stripped: false }, FakePlugB: { loaded: false, stripped: false }, FakePlugC: { loaded: false, stripped: false } },
+  itemFields: {}, globalFields: {}, configPath: "C:/fake/ui.json",
+};
+
+const api = {
+  async fetchApi(path) {
+    return { ok: true, json: async () => (path === "/nodes_manager/state" ? state : { ok: true, new: [], config: state.config }) };
+  },
+};
+
+const host = document.createElement("div");
+document.body.appendChild(host);
+
+const panel = new Panel(api);
+panel.mount(host);
+await new Promise((r) => setTimeout(r, 400));
+
+ok(!host.querySelector(".nm-err"), `面板无错误框${host.querySelector(".nm-err") ? "：" + host.querySelector(".nm-err").textContent : ""}`);
+ok(host.querySelector(".nm-zone"), "全局区块已渲染");
+const rows = host.querySelectorAll(".nm-plug-row");
+ok(rows.length === 3, `插件热载列出 ${rows.length} 行（期望 3）`);
+const btns = [...host.querySelectorAll(".nm-plug-row button")].map((b) => b.textContent);
+ok(btns.join(",") === "停用,启用,启用", `按钮文案按状态：${btns.join(",")}`);
+const nameB = [...host.querySelectorAll(".nm-plug-name")].find((n) => n.textContent === "FakePlugB");
+ok(!!nameB && nameB.parentElement.querySelector(".nm-warn"), "停用插件应有「已停用」徽标");
+// 区域条目也渲染出来了（配置里那个隐藏项）
+ok((host.textContent || "").includes("测试按钮A"), "界面条目列表已渲染");
+// 切换不炸（不真点网络，桩的 toggle 会走 fetchJSON → 桩返回）
+ok(true, "占位：切换交互由 stub 覆盖");
+
+document.getElementById("out").textContent = log.join("\n");
+window.__result = { pass: log.filter((l) => l.startsWith("PASS")).length,
+                    fail: log.filter((l) => l.startsWith("FAIL")).length, log };
+</script>
+</body>
+</html>

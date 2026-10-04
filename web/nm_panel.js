@@ -361,10 +361,12 @@ export class Panel {
       name.title = rec.path;
       row.appendChild(name);
       for (const b of this.pluginBadges(rec)) row.appendChild(b);
-      const btn = btn(rec.disabled || !(this.hot[rec.name] || {}).loaded ? "启用" : "停用",
-        () => this.togglePlugin(rec.name, rec.disabled || !(this.hot[rec.name] || {}).loaded));
-      btn.classList.add(rec.disabled || !(this.hot[rec.name] || {}).loaded ? "nm-primary" : "nm-danger");
-      row.appendChild(btn);
+      // 局部变量不能叫 btn —— 会遮蔽模块级的 btn()，const 提升后引用先于初始化
+      // （TDZ），整个面板直接「加载失败」（实测）。
+      const enable = rec.disabled || !(this.hot[rec.name] || {}).loaded;
+      const act = btn(enable ? "启用" : "停用", () => this.togglePlugin(rec.name, enable));
+      act.classList.add(enable ? "nm-primary" : "nm-danger");
+      row.appendChild(act);
       host.appendChild(row);
     }
     if (filtered.length > MAX) {
