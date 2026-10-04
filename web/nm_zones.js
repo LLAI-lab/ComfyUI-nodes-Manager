@@ -177,6 +177,10 @@ function collect(zone, light, knownKeys) {
     if (!el || seen.has(el)) return;
     // 跳过我们自己注入的东西
     if (el.closest?.("[data-nm-self]")) return;
+    // 自己的侧栏页签按钮不扫：它被吞掉面板就没有入口了（autoReveal=false
+    // 会把新条目预置隐藏，我们的页签按钮也吃这套，实测被藏过）
+    const own = el.getAttribute?.("aria-label") || el.getAttribute?.("title") || "";
+    if (typeof own === "string" && own.startsWith("ComfyUI-nodes-Manager")) return;
     seen.add(el);
     const r = light ? null : el.getBoundingClientRect();
     const { key, stable } = stableKey(el, zone.id, depth);

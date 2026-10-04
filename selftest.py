@@ -172,7 +172,7 @@ def test_scan(scan):
 def test_web():
     """前端文件齐不齐，入口 import 的符号是否真的被导出。"""
     web = os.path.join(HERE, "web")
-    need = ["nodes_manager.js", "nm_panel.js", "nm_style.js", "nm_zones.js"]
+    need = ["nodes_manager.js", "nm_panel.js", "nm_style.js", "nm_zones.js", "nm_entry.js"]
     for name in need:
         check(os.path.isfile(os.path.join(web, name)), "缺前端文件 %s" % name)
 

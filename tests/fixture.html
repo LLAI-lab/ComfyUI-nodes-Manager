@@ -44,6 +44,8 @@
 <div class="side-tool-bar-container">
   <button aria-label="节点库"><i class="pi pi-box"></i></button>
   <button aria-label="模型库"><i class="pi pi-database"></i></button>
+  <!-- 自己的页签按钮：永不扫描（被 autoReveal 吞掉就没有入口了） -->
+  <button aria-label="ComfyUI-nodes-Manager：调整插件按钮的字号 / 图标 / 显隐 / 位置"><i class="pi pi-sliders-h"></i></button>
 </div>
 
 <pre id="out" style="padding:8px;white-space:pre-wrap"></pre>
@@ -63,6 +65,8 @@ ok(bar.length >= 8, `顶栏扫到 ${bar.length} 个条目（期望 ≥8）`);
 ok(rail.length === 2, `竖栏扫到 ${rail.length} 个（期望 2）`);
 ok(r1.zones.find(z => z.id === "actionbar").present, "actionbar 区域应判定为存在");
 ok(!r1.zones.find(z => z.id === "bodyTop").present, "不存在的区域应判定为不存在");
+ok(!r1.items.some(i => (i.label || "").includes("ComfyUI-nodes-Manager")),
+   "自己的侧栏页签按钮不应被扫描（防自锁）");
 
 // 埋在两层包装里的按钮要能扫到
 const naiba = bar.find(i => i.label === "NAIBA");

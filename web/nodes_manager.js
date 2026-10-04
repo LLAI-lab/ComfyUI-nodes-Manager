@@ -22,6 +22,7 @@ import { api } from "../../scripts/api.js";
 import { Panel } from "./nm_panel.js";
 import { scanUI, toPayload, ZONE_BY_ID } from "./nm_zones.js";
 import { applyCSS, markAll, renderCSS } from "./nm_style.js";
+import { installCanvasMenu, openPanel } from "./nm_entry.js";
 
 const TAB_ID = "nodes-manager";
 
@@ -152,6 +153,8 @@ app.registerExtension({
 
   async setup() {
     registerTab();
+    // 右键画布 → 「界面管理」：独立浮动窗口，侧栏页签被隐藏时也能打开面板
+    installCanvasMenu(app, () => openPanel(api));
 
     await cfgReady;
     if (!cfg) return;                       // 配置读取失败，上面已经报过错
