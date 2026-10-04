@@ -29,6 +29,18 @@
 
 数值输入框留空 = 不干预，保持插件原样。
 
+## 插件热载（不重启地停用 / 启用插件）
+
+面板里的「插件热载」区块列出磁盘上全部插件，按名字过滤后可以逐个**停用 / 启用**：
+
+- **停用**：立即把它的节点类从节点菜单/搜索里移除，并把目录改名 `<名>.disabled`
+  （与 ComfyUI-Manager 同一约定，重启后保持停用）。它的前端脚本与 HTTP 接口
+  本次会话仍保留；之后提交的、用到其节点的工作流会报「节点不存在」。
+- **启用**：目录改回原名并立即导入注册（顺带补挂 `/extensions/<名>` 静态目录）；
+  **前端 JS 要刷新页面才会加载**。原本就没导入过的插件也能现场热载入。
+- 自身（界面管理）不允许停用；目录被占用改不了名时退化为仅本次会话停用，会提示。
+- 重名节点按 ComfyUI「先注册者优先」的约定处理：恢复/导入时不覆盖已有类。
+
 ## 探测新插件
 
 两路一起看：
@@ -109,6 +121,7 @@ aria-label/title + 内部图标类名 + 文字内容。几个要点：
     __init__.py            入口：注册路由 + WEB_DIRECTORY，启动时打印探测结果
     engine/store.py        配置读写（清洗 + 原子写 + mtime 缓存）
     engine/scan.py         扫 custom_nodes，判定新增 / 消失
+    engine/hotload.py      热加载：软停用（摘类）/ 热启用（现场导入）+ 目录改名
     engine/routes.py       HTTP 接口
     web/nodes_manager.js   前端入口：注入配置、注册侧栏页签、补扫
     web/nm_zones.js        区域定义 + DOM 扫描 + 内容签名（唯一写死选择器的地方）
@@ -128,6 +141,7 @@ aria-label/title + 内部图标类名 + 文字内容。几个要点：
     POST /nodes_manager/config   写回 global / items
     POST /nodes_manager/seen     上报扫到的界面条目，返回其中哪些是新的
     POST /nodes_manager/forget   删掉若干条目的配置
+    POST /nodes_manager/plugin_toggle  热停用 / 热启用一个插件
 
 和 ComfyUI 其它插件的接口一样没有额外鉴权 —— 能访问 ComfyUI 的人就能改界面配置。
 

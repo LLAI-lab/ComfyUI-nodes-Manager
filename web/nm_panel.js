@@ -16,6 +16,7 @@ const API = {
   config: "/nodes_manager/config",
   seen: "/nodes_manager/seen",
   forget: "/nodes_manager/forget",
+  pluginToggle: "/nodes_manager/plugin_toggle",
 };
 
 // 条目默认配置，和后端 store.ITEM_FIELDS 对齐
@@ -31,6 +32,9 @@ export class Panel {
     this.saved = null;        // 上次保存的配置，用来判断「有未保存改动」
     this.scan = null;         // 最近一次扫描结果
     this.newPlugins = [];     // 后端报告的新插件
+    this.plugins = [];        // 磁盘插件清单
+    this.hot = {};            // 插件运行时热载状态 {name: {loaded, stripped}}
+    this.pluginFilter = "";
     this.filter = "";
     this.onlyChanged = false;
     this.root = null;
@@ -57,8 +61,20 @@ export class Panel {
     this.saved = JSON.parse(JSON.stringify(state.config));
     this.newPlugins = state.newPlugins || [];
     this.plugins = state.plugins || [];
+    this.hot = state.hot || {};
     this.configPath = state.configPath || "";
     this.dirty = false;
+  }
+
+  // 只刷新插件清单与热载状态，不动 this.cfg —— 不丢面板里未保存的调整
+  async refreshMeta() {
+    const state = await this.fetchJSON(API.state, undefined, { cache: "no-store" });
+    this.plugins = state.plugins || [];
+    this.hot = state.hot || {};
+    this.newPlugins = state.newPlugins || [];
+    for (const [k, v] of Object.entries(state.config.items || {})) {
+      if (!this.cfg.items[k]) this.cfg.items[k] = v;
+    }
   }
 
   // 扫 DOM，打标，把新条目报给后端
@@ -185,6 +201,11 @@ export class Panel {
 .nm-panel .nm-badge{background:#2563eb;color:#fff;border-radius:8px;padding:0 5px;font-size:10px}
 .nm-panel .nm-badge.nm-warn{background:#b45309}
 .nm-panel .nm-sticky{position:sticky;top:0;z-index:2;background:var(--comfy-menu-bg,#1e1e1e);padding-bottom:6px;border-bottom:1px solid var(--border-color,#333)}
+.nm-panel .nm-plug-list{max-height:280px;overflow:auto}
+.nm-panel .nm-plug-row{display:flex;align-items:center;gap:6px;padding:3px 8px;border-top:1px solid var(--border-color,#2c2c2c)}
+.nm-panel .nm-plug-row:hover{background:rgba(255,255,255,.05)}
+.nm-panel .nm-plug-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.nm-panel button.nm-danger{border-color:#b91c1c}
 `;
     document.head.appendChild(st);
   }
@@ -200,6 +221,7 @@ export class Panel {
     this.root.appendChild(this.header());
     if (this.newPlugins.length) this.root.appendChild(this.newPluginsBox());
     this.root.appendChild(this.globalBox());
+    this.root.appendChild(this.pluginsBox());
     for (const zone of this.scan?.zones || []) {
       this.root.appendChild(this.zoneBox(zone));
     }
@@ -250,6 +272,106 @@ export class Panel {
     const tip = this.root.querySelector(".nm-tip");
     for (const zone of this.scan?.zones || []) {
       this.root.insertBefore(this.zoneBox(zone), tip);
+    }
+  }
+
+  // ---------- 插件热载 ----------
+
+  pluginBadges(rec) {
+    const h = this.hot[rec.name] || {};
+    const out = [];
+    if (rec.disabled) out.push(this.warnBadge("已停用"));
+    else if (!h.loaded) out.push(this.warnBadge("未载入"));
+    if (h.stripped) out.push(this.warnBadge("热停用中"));
+    if (rec.web) out.push(badge("JS"));
+    return out;
+  }
+
+  warnBadge(text) {
+    const b = badge(text);
+    b.classList.add("nm-warn");
+    return b;
+  }
+
+  async togglePlugin(name, enable) {
+    if (!enable && !confirm(
+      `停用 ${name}：它的节点类会立即从节点菜单移除，目录改名 .disabled（重启后保持停用）；` +
+      `前端脚本与 HTTP 接口本次会话仍保留。继续？`)) return;
+    try {
+      const state = await this.fetchJSON(API.pluginToggle, { name, enable });
+      if (state.result && !state.result.ok) {
+        alert(`操作失败：${state.result.msg}`);
+      } else if (state.result?.msg) {
+        console.log("[nodes-Manager]", state.result.msg);
+      }
+      // 局部刷新：插件清单 / 热载状态 / 新配置条目并入，不动未保存的调整
+      this.plugins = state.plugins || [];
+      this.hot = state.hot || {};
+      this.newPlugins = state.newPlugins || [];
+      for (const [k, v] of Object.entries(state.config.items || {})) {
+        if (!this.cfg.items[k]) this.cfg.items[k] = v;
+      }
+      this.render();
+    } catch (err) {
+      alert(`请求失败：${err.message}`);
+    }
+  }
+
+  pluginsBox() {
+    const box = el("details", "nm-zone");
+    const list = this.plugins || [];
+    const f = (this.pluginFilter || "").toLowerCase();
+    const filtered = f ? list.filter((p) => p.name.toLowerCase().includes(f)) : list;
+    const disabledCount = list.filter((p) => p.disabled).length;
+
+    const sum = el("summary");
+    sum.append(document.createTextNode(`插件热载 `), badge(String(list.length)));
+    if (disabledCount) sum.append(document.createTextNode(" "), this.warnBadge(`停用 ${disabledCount}`));
+    box.appendChild(sum);
+
+    box.appendChild(el("div", "nm-item nm-tip",
+      "停用：立即移除它的节点类并把目录改名 .disabled（重启后保持停用）；前端脚本与 HTTP 接口本次会话仍保留，之后提交用到其节点的工作流会报错。\n" +
+      "启用：目录改回原名并立即导入注册；前端 JS 要刷新页面才会加载。"));
+
+    const search = document.createElement("input");
+    search.type = "text";
+    search.placeholder = "按插件名过滤（共 " + list.length + " 个）";
+    search.value = this.pluginFilter;
+    search.style.flex = "1";
+    search.oninput = () => { this.pluginFilter = search.value; this.renderPluginsList(); };
+    box.appendChild(el("div", "nm-item", search));
+
+    const listHost = el("div", "nm-plug-list");
+    box.appendChild(listHost);
+    this._pluginListHost = listHost;
+    this.renderPluginsList();
+    return box;
+  }
+
+  renderPluginsList() {
+    const host = this._pluginListHost;
+    if (!host) return;
+    host.textContent = "";
+    const f = (this.pluginFilter || "").toLowerCase();
+    const filtered = (this.plugins || []).filter((p) => !f || p.name.toLowerCase().includes(f));
+    const MAX = 150;
+    for (const rec of filtered.slice(0, MAX)) {
+      const row = el("div", "nm-plug-row");
+      const name = el("span", "nm-plug-name", rec.name);
+      name.title = rec.path;
+      row.appendChild(name);
+      for (const b of this.pluginBadges(rec)) row.appendChild(b);
+      const btn = btn(rec.disabled || !(this.hot[rec.name] || {}).loaded ? "启用" : "停用",
+        () => this.togglePlugin(rec.name, rec.disabled || !(this.hot[rec.name] || {}).loaded));
+      btn.classList.add(rec.disabled || !(this.hot[rec.name] || {}).loaded ? "nm-primary" : "nm-danger");
+      row.appendChild(btn);
+      host.appendChild(row);
+    }
+    if (filtered.length > MAX) {
+      host.appendChild(el("div", "nm-item nm-tip", `还有 ${filtered.length - MAX} 个未显示，输入过滤缩小范围。`));
+    }
+    if (!filtered.length) {
+      host.appendChild(el("div", "nm-item nm-tip", "没有匹配的插件"));
     }
   }
 

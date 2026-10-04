@@ -5,13 +5,14 @@
     POST /nodes_manager/config         整份写回（前端面板「保存」）
     POST /nodes_manager/seen           前端报告本次扫到的界面条目，回新增的 id
     POST /nodes_manager/forget         删掉若干条目的配置
+    POST /nodes_manager/plugin_toggle  热停用 / 热启用一个 custom_nodes 插件
     GET  /nodes_manager/css            把配置渲染成 CSS 文本（调试用，前端直接注入）
 
 写接口只接受本机请求之外的一切都由 ComfyUI 自己的 server 管；这里不额外加鉴权，
 和 ComfyUI 其它插件的接口一致 —— 注意这意味着能访问 ComfyUI 的人就能改界面配置。
 """
 
-from . import scan, store
+from . import hotload, scan, store
 
 _DONE = False
 
@@ -30,6 +31,7 @@ def state_payload():
         "plugins": found,
         "newPlugins": fresh,
         "gonePlugins": gone,
+        "hot": hotload.hot_state([r["name"] for r in found]),
         "itemFields": store.ITEM_FIELDS,
         "globalFields": store.GLOBAL_FIELDS,
         "configPath": store.config_path(),
@@ -101,5 +103,14 @@ def register_routes():
         gone = store.forget(cfg, body.get("ids"))
         cfg = store.save(cfg)
         return web.json_response({"ok": True, "removed": gone, "config": cfg})
+
+    @instance.routes.post("/nodes_manager/plugin_toggle")
+    async def _nm_plugin_toggle(request):
+        body = await _json_body(request)
+        if body is None:
+            return web.json_response({"error": "需要 JSON 对象"}, status=400)
+        result = hotload.toggle(body.get("name"), bool(body.get("enable")))
+        # 无论成败都回完整 state，面板刷新一遍就是最新状态
+        return web.json_response({**state_payload(), "result": result})
 
     _DONE = True

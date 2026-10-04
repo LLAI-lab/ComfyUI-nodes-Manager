@@ -47,7 +47,8 @@ def load_pkg():
     spec.loader.exec_module(mod)
     return (sys.modules[name + ".engine.store"],
             sys.modules[name + ".engine.scan"],
-            sys.modules[name + ".engine.routes"])
+            sys.modules[name + ".engine.routes"],
+            sys.modules[name + ".engine.hotload"])
 
 
 def test_sanitize(store):
@@ -136,6 +137,71 @@ def test_seen(store):
     check(gone == [] or gone == ["actionbar|t:按钮A"], "forget 返回值不对：%r" % gone)
 
 
+def test_hotload(hotload):
+    """热加载：无 ComfyUI 环境下，守卫逻辑必须全部优雅拒绝。"""
+    check(hotload.SELF_NAME == "ComfyUI-nodes-Manager", "SELF_NAME 判断不对：%r" % hotload.SELF_NAME)
+
+    r = hotload.toggle("", True)
+    check(not r["ok"] and "插件名" in r["msg"], "空名应拒绝：%r" % r)
+
+    r = hotload.toggle("不存在-XYZ", True)
+    check(not r["ok"] and "没有这个插件" in r["msg"], "未知插件应拒绝：%r" % r)
+
+    r = hotload.toggle(hotload.SELF_NAME, False)
+    check(not r["ok"] and "自身" in r["msg"], "停用自身应拒绝：%r" % r)
+
+    # 真实存在的插件：环境里没有 ComfyUI 的 nodes 模块，动作要失败而不是崩
+    r = hotload.toggle(hotload.SELF_NAME, True)
+    check(isinstance(r, dict) and "ok" in r, "启用应返回结构化结果：%r" % r)
+    hot_state = hotload.hot_state([hotload.SELF_NAME])
+    check(hot_state[hotload.SELF_NAME]["loaded"] in (True, False), "hot_state 应返回布尔")
+
+
+def test_hotload_roundtrip(hotload, scan, store, tmp):
+    """假插件 + 假 nodes 模块，走一遍 停用→改名→启用→改回 的完整往返。"""
+    import types
+
+    root = os.path.join(tmp, "custom_nodes")
+    plug = os.path.join(root, "FakePlug")
+    os.makedirs(os.path.join(plug, "web"))
+    with open(os.path.join(plug, "__init__.py"), "w", encoding="utf-8") as fp:
+        fp.write(
+            "NODE_CLASS_MAPPINGS = {'FakeNode': type('FakeNode', (), {})}\n"
+            "NODE_DISPLAY_NAME_MAPPINGS = {'FakeNode': '假节点'}\n"
+            "WEB_DIRECTORY = 'web'\n"
+        )
+    scan.custom_nodes_dirs = lambda: [root]
+
+    comfy = types.SimpleNamespace(NODE_CLASS_MAPPINGS={}, NODE_DISPLAY_NAME_MAPPINGS={})
+    sys.modules["nodes"] = comfy
+    try:
+        r = hotload.toggle("FakePlug", False)             # 停用（未导入 → 只改名）
+        check(r["ok"], "停用应成功：%r" % r)
+        check(os.path.isdir(plug + ".disabled"), "目录应改名为 .disabled")
+        check(comfy.NODE_CLASS_MAPPINGS == {}, "未导入的插件应没有类可摘")
+
+        r = hotload.toggle("FakePlug", True)              # 启用（现场导入 + 注册）
+        check(r["ok"], "启用应成功：%r" % r)
+        check(os.path.isdir(plug) and not os.path.isdir(plug + ".disabled"), "目录应改回原名")
+        check("FakeNode" in comfy.NODE_CLASS_MAPPINGS, "节点类应注册进全局映射")
+        check(comfy.NODE_DISPLAY_NAME_MAPPINGS.get("FakeNode") == "假节点", "显示名应注册")
+        check(r["msg"], "启用消息不能为空")
+
+        # 已导入后再停用：应摘类 + 改名；再启用：应放回类
+        r = hotload.toggle("FakePlug", False)
+        check(r["ok"] and r.get("stripped") == 1, "再停用应摘掉 1 个类：%r" % r)
+        check("FakeNode" not in comfy.NODE_CLASS_MAPPINGS, "停用后类应从全局映射消失")
+        check(os.path.isdir(plug + ".disabled"), "再停用目录应改名")
+        r = hotload.toggle("FakePlug", True)
+        check(r["ok"] and "放回" in r["msg"], "再启用应走恢复路径：%r" % r)
+        check(comfy.NODE_CLASS_MAPPINGS.get("FakeNode") is not None, "恢复后类应回到映射")
+    finally:
+        sys.modules.pop("nodes", None)
+        hotload._RUNTIME.pop("FakePlug", None)
+        scan.custom_nodes_dirs = scan.__dict__.get("_orig_dirs", scan.custom_nodes_dirs)
+        store.load(force=True)
+
+
 def test_scan(scan):
     """扫描要能在真的 custom_nodes 里认出插件，并认出自己。"""
     found = scan.scan()
@@ -208,20 +274,23 @@ def main():
     tmp = tempfile.mkdtemp(prefix="nm-selftest-")
     os.environ["NODES_MANAGER_CONFIG_DIR"] = os.path.join(tmp, "nodes_manager")
 
-    store, scan, routes = load_pkg()
+    store, scan, routes, hotload = load_pkg()
     check(store.config_path().startswith(tmp),
           "配置目录没指到临时目录：%s" % store.config_path())
 
     try:
-        print("[1/5] 配置清洗")
+        print("[1/6] 配置清洗")
         test_sanitize(store)
-        print("[2/5] 存取回环")
+        print("[2/6] 存取回环")
         test_roundtrip(store, tmp)
-        print("[3/5] 探测记录")
+        print("[3/6] 探测记录")
         test_seen(store)
-        print("[4/5] 插件扫描")
+        print("[4/6] 插件扫描")
         test_scan(scan)
-        print("[5/5] 前端文件")
+        print("[5/6] 热加载")
+        test_hotload(hotload)
+        test_hotload_roundtrip(hotload, scan, store, tmp)
+        print("[6/6] 前端文件")
         test_web()
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
