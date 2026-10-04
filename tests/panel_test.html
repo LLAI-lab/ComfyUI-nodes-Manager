@@ -12,6 +12,10 @@
 <div class="side-tool-bar-container">
   <button aria-label="节点库"><i class="pi pi-box"></i></button>
 </div>
+<div id="lazy-float" style="position:fixed;right:20px;bottom:20px;width:180px" class="lazy-res-panel">
+  <div class="lazy-title">Lazy 资源</div>
+  <button class="lazy-btn">刷新</button>
+</div>
 <pre id="out" style="padding:8px;white-space:pre-wrap"></pre>
 <script>
 // 模块内的未捕获异常不会进 __result，先抓到 out 里
@@ -30,7 +34,7 @@ window.addEventListener("unhandledrejection", (e) => {
   先炸出来。
 -->
 <script type="module">
-import { Panel } from "../web/nm_panel.js?v=8";
+import { Panel } from "../web/nm_panel.js?v=9";
 
 const log = [];
 const ok = (cond, msg) => log.push((cond ? "PASS " : "FAIL ") + msg);
@@ -42,6 +46,7 @@ const state = {
     global: { enabled: true, scale: null, gap: null, fontSize: null, iconSize: null, wrap: false, autoReveal: true },
     items: { "actionbar|g:button|d:1|t:测试按钮A": { hidden: true, fontSize: null, iconSize: null, labelOnly: false, iconOnly: false, order: null, zone: null, width: null, note: "" } },
     seen: {}, plugins: {},
+    zones: [{ id: "ztest", label: "Lazy 资源", root: "#lazy-float" }],
   },
   plugins: [
     { name: "FakePlugA", path: "C:/x/FakePlugA", disabled: false, web: "web", mtime: 0 },
@@ -69,14 +74,18 @@ await new Promise((r) => setTimeout(r, 400));
 
 ok(!host.querySelector(".nm-err"), `面板无错误框${host.querySelector(".nm-err") ? "：" + host.querySelector(".nm-err").textContent : ""}`);
 ok(host.querySelector(".nm-zone"), "全局区块已渲染");
-const rows = host.querySelectorAll(".nm-plug-row");
+const rows = host.querySelectorAll(".nm-plug-list .nm-plug-row");
 ok(rows.length === 3, `插件热载列出 ${rows.length} 行（期望 3）`);
-const btns = [...host.querySelectorAll(".nm-plug-row button")].map((b) => b.textContent);
+const btns = [...host.querySelectorAll(".nm-plug-list .nm-plug-row button")].map((b) => b.textContent);
 ok(btns.join(",") === "停用,启用,启用", `按钮文案按状态：${btns.join(",")}`);
-const nameB = [...host.querySelectorAll(".nm-plug-name")].find((n) => n.textContent === "FakePlugB");
+const nameB = [...host.querySelectorAll(".nm-plug-list .nm-plug-name")].find((n) => n.textContent === "FakePlugB");
 ok(!!nameB && nameB.parentElement.querySelector(".nm-warn"), "停用插件应有「已停用」徽标");
 // 区域条目也渲染出来了（配置里那个隐藏项）
 ok((host.textContent || "").includes("测试按钮A"), "界面条目列表已渲染");
+ok((host.textContent || "").includes("自定义区域"), "自定义区域管理块已渲染");
+ok((host.textContent || "").includes("Lazy 资源"), "自定义区域行已渲染");
+const zoneOK = [...host.querySelectorAll("details")].some(d => (d.textContent || "").includes("刷新"));
+ok(zoneOK, "自定义区域的条目应出现在区域列表");
 // 切换不炸（不真点网络，桩的 toggle 会走 fetchJSON → 桩返回）
 ok(true, "占位：切换交互由 stub 覆盖");
 

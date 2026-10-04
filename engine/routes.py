@@ -80,6 +80,8 @@ def register_routes():
             merged["global"] = incoming["global"]
         if "items" in incoming:
             merged["items"] = incoming["items"]
+        if "zones" in incoming:
+            merged["zones"] = incoming["zones"]
         saved = store.save(merged)
         return web.json_response({"ok": True, "config": saved})
 

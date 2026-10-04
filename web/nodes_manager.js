@@ -40,6 +40,8 @@ let reportTimer = null;
 function zonesById() {
   const out = {};
   for (const [id, z] of Object.entries(ZONE_BY_ID)) out[id] = { root: z.root };
+  // 用户拾取的自定义区域（悬浮卡片等）也参与 CSS 兜底锚定
+  for (const z of cfg?.zones || []) out["u:" + z.id] = { root: z.root };
   return out;
 }
 
@@ -67,7 +69,8 @@ function cachedCSS() {
 function quickPass() {
   if (!cfg) return null;
   const known = Object.keys(cfg.items || {});
-  const { items } = scanUI({ light: true, knownKeys: known });
+  const customZones = (cfg.zones || []).map((z) => ({ zoneId: "u:" + z.id, label: z.label, root: z.root }));
+  const { items } = scanUI({ light: true, knownKeys: known, customZones });
   markAll(items);
   applyCSS(cachedCSS());
   return items;
@@ -100,6 +103,11 @@ async function reportSeen(items) {
       let changed = false;
       for (const [k, v] of Object.entries(state.config?.items || {})) {
         if (!cfg.items[k]) { cfg.items[k] = v; changed = true; }
+      }
+      // 自定义区域以服务端为准（面板拾取后立即落盘），本地为空才回灌
+      if (Array.isArray(state.config?.zones) && state.config.zones.length && !(cfg.zones || []).length) {
+        cfg.zones = state.config.zones;
+        changed = true;
       }
       if (changed) { cssForCfg = null; applyCSS(cachedCSS()); }
     }

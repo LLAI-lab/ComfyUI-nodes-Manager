@@ -56,9 +56,16 @@
 
 <pre id="out" style="padding:8px;white-space:pre-wrap"></pre>
 
+<!-- 悬浮卡片：内置 9 区管不到，靠自定义区域/拾取器纳入管理 -->
+<div id="lazy-float" style="position:fixed;right:20px;bottom:20px;width:180px;background:#222;border:1px solid #555;border-radius:8px;padding:6px" class="lazy-res-panel">
+  <div class="lazy-title">Lazy 资源</div>
+  <div>内存 Comfy <b>45%</b></div>
+  <button class="lazy-btn">刷新</button>
+</div>
+
 <script type="module">
-import { scanUI, toPayload, ZONE_BY_ID } from "../web/nm_zones.js?v=7";
-import { applyCSS, markAll, renderCSS, MARK_ATTR, highlight } from "../web/nm_style.js?v=7";
+import { scanUI, toPayload, ZONE_BY_ID, pickWidgetRoot, buildSelector } from "../web/nm_zones.js?v=8";
+import { applyCSS, markAll, renderCSS, MARK_ATTR, highlight } from "../web/nm_style.js?v=8";
 
 const log = [];
 const ok = (cond, msg) => log.push((cond ? "PASS " : "FAIL ") + msg);
@@ -248,6 +255,26 @@ ok(cs(shrinkDiv.el).display !== "none", "藏内部按钮不应把外层包装一
 // ---- 8. 上报载荷 ----
 const pay = toPayload(scanUI().items);
 ok(pay.every(p => p.id && p.zone && !("el" in p)), "上报载荷应只含 id/label/zone，不带 DOM 引用");
+
+// ---- 9. 自定义区域（悬浮卡片）----
+// 拾取器：点击卡片内部元素应定位到整张卡片根
+const title = document.querySelector(".lazy-title");
+const picked = pickWidgetRoot(title);
+ok(picked && picked.id === "lazy-float", "拾取应定位到卡片根（fixed 祖先）");
+ok(buildSelector(picked) === "#lazy-float", "唯一 id 应生成 #id 选择器");
+// 自定义区域扫描：卡片里的按钮/子块全部成为条目
+const czr = scanUI({ customZones: [{ zoneId: "u:t1", label: "Lazy 资源", root: "#lazy-float" }] });
+const cz = czr.zones.find(z => z.id === "u:t1");
+ok(cz && cz.present && cz.count >= 2, `自定义区域应扫到条目（${cz?.count}）`);
+const czItems = czr.items.filter(i => i.zone === "u:t1");
+ok(czItems.some(i => i.label.includes("刷新")), "自定义区域条目应含卡片内按钮");
+// 隐藏规则：自定义区域的兜底锚定在卡片根上
+const cKey = czItems.find(i => i.label.includes("刷新")).key;
+markAll(czItems);
+const cfgCz = { global: { enabled: true }, items: { [cKey]: { hidden: true } } };
+applyCSS(renderCSS(cfgCz, { u: { root: "#lazy-float" } }));
+ok(cs(document.querySelector(".lazy-btn")).display === "none", "自定义区域条目隐藏应生效");
+applyCSS(renderCSS({ global: { enabled: true }, items: {} }, {}));
 
 document.getElementById("out").textContent = log.join("\n");
 window.__result = { pass: log.filter(l => l.startsWith("PASS")).length,

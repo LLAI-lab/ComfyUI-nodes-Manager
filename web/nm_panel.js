@@ -8,7 +8,7 @@
 //   * 「保存」才落盘到 user/default/nodes_manager/ui.json；
 //   * 「撤销改动」重新拉一次配置，回到上次保存的状态。
 
-import { scanUI, toPayload, ZONE_BY_ID } from "./nm_zones.js";
+import { scanUI, toPayload, ZONE_BY_ID, pickWidgetRoot, buildSelector } from "./nm_zones.js";
 import { applyCSS, highlight, markAll, renderCSS } from "./nm_style.js";
 
 const API = {
@@ -81,7 +81,10 @@ export class Panel {
   async rescan() {
     // knownKeys：配置里已有的 key。文字漂移的元素（监控条）按基底沿用旧身份，
     // 否则每漂一次就生成一个新条目，隐藏规则追不上（闪烁的根源之一）。
-    this.scan = scanUI({ knownKeys: Object.keys(this.cfg.items || {}) });
+    this.scan = scanUI({
+      knownKeys: Object.keys(this.cfg.items || {}),
+      customZones: (this.cfg.zones || []).map((z) => ({ zoneId: "u:" + z.id, label: z.label, root: z.root })),
+    });
     markAll(this.scan.items);
     this.apply();
     try {
@@ -117,6 +120,7 @@ export class Panel {
   apply() {
     const zonesById = {};
     for (const [id, z] of Object.entries(ZONE_BY_ID)) zonesById[id] = { root: z.root };
+    for (const z of this.cfg.zones || []) zonesById["u:" + z.id] = { root: z.root };
     applyCSS(renderCSS(this.cfg, zonesById));
     // 通知入口模块换了配置对象。不通知的话，入口那边的定时补扫会拿旧配置
     // 重新渲染 CSS，把面板里的预览覆盖掉（save/revert 会整体换掉 this.cfg，
@@ -132,7 +136,7 @@ export class Panel {
 
   async save() {
     const res = await this.fetchJSON(API.config, {
-      config: { global: this.cfg.global, items: this.cfg.items },
+      config: { global: this.cfg.global, items: this.cfg.items, zones: this.cfg.zones || [] },
     });
     this.cfg = res.config;
     this.saved = JSON.parse(JSON.stringify(res.config));
@@ -221,6 +225,7 @@ export class Panel {
     this.root.appendChild(this.header());
     if (this.newPlugins.length) this.root.appendChild(this.newPluginsBox());
     this.root.appendChild(this.globalBox());
+    this.root.appendChild(this.zonesBox());
     this.root.appendChild(this.pluginsBox());
     for (const zone of this.scan?.zones || []) {
       this.root.appendChild(this.zoneBox(zone));
@@ -265,10 +270,10 @@ export class Panel {
     return box;
   }
 
-  // 只重画区域列表，避免搜索时输入框失焦
+  // 只重画区域列表，避免搜索时输入框失焦。
+  // 全局/插件热载/自定义区域这些管理块带 data-nm-keep，搜索时不被清掉。
   renderZonesOnly() {
-    const boxes = this.root.querySelectorAll(".nm-zone");
-    for (const b of boxes) b.remove();
+    for (const b of this.root.querySelectorAll(".nm-zone:not([data-nm-keep])")) b.remove();
     const tip = this.root.querySelector(".nm-tip");
     for (const zone of this.scan?.zones || []) {
       this.root.insertBefore(this.zoneBox(zone), tip);
@@ -319,6 +324,7 @@ export class Panel {
 
   pluginsBox() {
     const box = el("details", "nm-zone");
+    box.setAttribute("data-nm-keep", "1");
     const list = this.plugins || [];
     const f = (this.pluginFilter || "").toLowerCase();
     const filtered = f ? list.filter((p) => p.name.toLowerCase().includes(f)) : list;
@@ -379,6 +385,7 @@ export class Panel {
 
   newPluginsBox() {
     const box = el("details", "nm-zone");
+    box.setAttribute("data-nm-keep", "1");
     box.open = true;
     const sum = el("summary");
     sum.append(document.createTextNode("新装的插件 "), badge(String(this.newPlugins.length)));
@@ -391,6 +398,7 @@ export class Panel {
   globalBox() {
     const g = this.cfg.global;
     const box = el("details", "nm-zone");
+    box.setAttribute("data-nm-keep", "1");
     box.open = true;
     box.appendChild(el("summary", null, "全局"));
 
@@ -421,6 +429,130 @@ export class Panel {
       "数值留空 = 不干预。字号设在按钮条上靠继承生效，插件自己写死字号的按钮改「图标」那一栏，或到下面单条调整。"));
     box.appendChild(body);
     return box;
+  }
+
+  // ---------- 自定义区域（悬浮卡片拾取） ----------
+
+  zonesBox() {
+    const box = el("details", "nm-zone");
+    box.setAttribute("data-nm-keep", "1");
+    const zones = this.cfg.zones || [];
+    const sum = el("summary");
+    sum.append(document.createTextNode("自定义区域 "), badge(String(zones.length)));
+    box.appendChild(sum);
+
+    box.appendChild(el("div", "nm-item nm-tip",
+      "内置 9 个区域管不到的悬浮卡片（监控挂件、资源球等）从这里加：点「拾取悬浮卡片」，\n" +
+      "再去页面上点一下那张卡片即可——卡片里的按钮/文字会出现在下面的区域列表里，照常调整。\n" +
+      "拾取会立即保存。删除区域会连同它的条目配置一起清掉。"));
+
+    const row = el("div", "nm-ctl");
+    const pick = btn(this._picking ? "拾取中…（Esc 取消）" : "拾取悬浮卡片", () => this.startPick());
+    pick.classList.add("nm-primary");
+    row.appendChild(pick);
+    box.appendChild(row);
+
+    for (const z of zones) {
+      const zrow = el("div", "nm-plug-row");
+      const name = el("span", "nm-plug-name", z.label);
+      const cnt = this.scan?.zones?.find((s) => s.id === "u:" + z.id);
+      name.title = z.root + (cnt ? `\n条目 ${cnt.count} 个` : "\n（当前页面上没扫到，选择器可能失效）");
+      zrow.appendChild(name);
+      if (cnt && !cnt.present) zrow.appendChild(this.warnBadge("失效"));
+      const del = btn("删除", () => this.removeZone(z.id));
+      del.classList.add("nm-danger");
+      zrow.appendChild(del);
+      box.appendChild(zrow);
+    }
+    return box;
+  }
+
+  async removeZone(id) {
+    this.cfg.zones = (this.cfg.zones || []).filter((z) => z.id !== id);
+    // 区域删了，它名下的条目配置与探测记录一并清掉，不留孤儿
+    const keys = Object.keys(this.cfg.items).filter((k) => k.startsWith("u:" + id + "|"));
+    for (const k of keys) delete this.cfg.items[k];
+    try {
+      await this.fetchJSON(API.forget, { ids: keys });
+    } catch { /* 记录清不掉不影响 */ }
+    await this.save();
+  }
+
+  startPick() {
+    if (this._picking) return;
+    this._picking = true;
+    this.render();
+
+    const tip = el("div", null, "在页面上点击要管理的悬浮卡片（Esc 取消）");
+    tip.setAttribute("data-nm-self", "1");
+    Object.assign(tip.style, {
+      position: "fixed", top: "10px", left: "50%", transform: "translateX(-50%)",
+      zIndex: "2147483647", background: "#2563eb", color: "#fff",
+      padding: "6px 14px", borderRadius: "8px", fontSize: "12px", pointerEvents: "none",
+    });
+    const hl = document.createElement("div");
+    hl.setAttribute("data-nm-self", "1");
+    Object.assign(hl.style, {
+      position: "fixed", zIndex: "2147483646", display: "none",
+      border: "2px solid #f59e0b", borderRadius: "4px", pointerEvents: "none",
+      background: "rgba(245,158,11,.08)",
+    });
+    document.body.append(tip, hl);
+
+    const move = (e) => {
+      const t = e.target;
+      if (!t || t.closest?.("[data-nm-self]")) { hl.style.display = "none"; this._pickTarget = null; return; }
+      const root = pickWidgetRoot(t);
+      this._pickTarget = root;
+      const r = root.getBoundingClientRect();
+      Object.assign(hl.style, {
+        display: "block",
+        left: r.left + "px", top: r.top + "px", width: r.width + "px", height: r.height + "px",
+      });
+    };
+    const finish = (commit) => {
+      removeEventListener("mouseover", move, true);
+      removeEventListener("click", onClick, true);
+      removeEventListener("keydown", onKey, true);
+      tip.remove(); hl.remove();
+      this._picking = false;
+      const target = this._pickTarget;
+      this._pickTarget = null;
+      if (commit && target) this.addZoneFromPick(target);
+      else this.render();
+    };
+    const onClick = (e) => {
+      e.preventDefault(); e.stopPropagation();
+      if (e.target?.closest?.("[data-nm-self]")) { finish(false); return; }
+      finish(true);
+    };
+    const onKey = (e) => { if (e.key === "Escape") finish(false); };
+    addEventListener("mouseover", move, true);
+    addEventListener("click", onClick, true);
+    addEventListener("keydown", onKey, true);
+  }
+
+  async addZoneFromPick(rootEl) {
+    const rootSel = buildSelector(rootEl);
+    if (!rootSel) {
+      alert("这个元素找不到唯一的定位方式（没有专属 id/class，结构也会漂），\n试着点卡片里带边框的内容部分。");
+      this.render();
+      return;
+    }
+    const head = (rootEl.textContent || "").replace(/\s+/g, " ").trim().slice(0, 12);
+    const label = (prompt("区域名称（显示在面板里）", head || "悬浮卡片") || "").trim() || "悬浮卡片";
+    this.cfg.zones = this.cfg.zones || [];
+    this.cfg.zones.push({ id: "z" + Date.now().toString(36), label, root: rootSel });
+    try {
+      await this.save();
+      // 旧版后端会丢弃 zones 字段——保存后没存住就明说，别让用户以为拾取坏了
+      if (!(this.cfg.zones || []).some((z) => z.root === rootSel)) {
+        alert("自定义区域没能保存：运行中的 ComfyUI 后端是旧版，\n重启 ComfyUI 后再试一次。");
+      }
+    } catch (err) {
+      alert(`保存失败：${err.message}`);
+      this.render();
+    }
   }
 
   zoneBox(zone) {

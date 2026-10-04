@@ -250,13 +250,17 @@ function collect(zone, light, knownKeys) {
 // 扫全部区域。返回 {zones: [...], items: [...]}；items 里带 el 引用，
 // 面板用它做「鼠标悬停高亮」，提交给后端前要剥掉。
 // opts.light —— 后台补扫用，不测量不探测；
-// opts.knownKeys —— 配置里已有的 key 集合，新元素同基底时直接沿用（key 粘滞）。
+// opts.knownKeys —— 配置里已有的 key 集合，新元素同基底时直接沿用（key 粘滞）；
+// opts.customZones —— 用户拾取的自定义区域 [{zoneId, label, root}]，
+//   悬浮卡片等不在内置 9 区里的东西全靠它纳入管理。
 export function scanUI(opts) {
   const light = !!opts?.light;
   const knownKeys = opts?.knownKeys || null;
   const zones = [];
   const items = [];
-  for (const zone of ZONES) {
+  const all = [...ZONES.map((z) => ({ id: z.id, label: z.label, root: z.root, hint: z.hint })),
+               ...(opts?.customZones || []).map((z) => ({ id: z.zoneId, label: z.label, root: z.root, hint: "自定义区域" }))];
+  for (const zone of all) {
     const res = collect(zone, light, knownKeys);
     zones.push({
       id: zone.id,
@@ -274,4 +278,72 @@ export function scanUI(opts) {
 // 提交给后端的精简形态（去掉 DOM 引用）。
 export function toPayload(items) {
   return items.map((it) => ({ id: it.key, label: it.label, zone: it.zone }));
+}
+
+// ---------- 拾取器（把悬浮卡片变成自定义区域） ----------
+
+function cssIdent(s) {
+  try {
+    return CSS.escape(s);
+  } catch {
+    return String(s).replace(/[^\w-]/g, "\\$&");
+  }
+}
+
+// 从点击元素向上找「卡片根」：有可见面积的定位元素（fixed/absolute）。
+// 浮动卡片外面常包一两层定位包装，取到最高的、面积不超过视口 85% 的那层
+// —— 再往上就是全屏遮罩之类的容器了，不能要。
+export function pickWidgetRoot(el) {
+  let best = null;
+  let p = el;
+  for (let i = 0; i < 6 && p && p !== document.body; i++) {
+    const cs = getComputedStyle(p);
+    const r = p.getBoundingClientRect();
+    if ((cs.position === "fixed" || cs.position === "absolute")
+        && r.width >= 60 && r.height >= 30) {
+      if (r.width > innerWidth * 0.85 && r.height > innerHeight * 0.85) break;
+      best = p;
+    }
+    p = p.parentElement;
+  }
+  return best || el;
+}
+
+// 给元素算一个**唯一**的选择器：唯一 id > 全类组合 > 标签+类 > 结构路径。
+// 每一步都在当前 DOM 里验证 querySelectorAll 恰好 1 个；全失败返回 null
+// （调用方提示用户换个点选位置，绝不能存一个不唯一的进去）。
+export function buildSelector(el) {
+  if (el.id && el.id.trim()) {
+    const s = "#" + cssIdent(el.id.trim());
+    try { if (document.querySelectorAll(s).length === 1) return s; } catch { /* ignore */ }
+  }
+  const classes = [...el.classList].filter(Boolean);
+  const candidates = [];
+  if (classes.length) {
+    candidates.push(classes.map((c) => "." + cssIdent(c)).join(""));
+    candidates.push(el.tagName.toLowerCase() + classes.map((c) => "." + cssIdent(c)).join(""));
+  }
+  for (const s of candidates) {
+    try { if (document.querySelectorAll(s).length === 1) return s; } catch { /* ignore */ }
+  }
+  // 结构路径：tag:nth-of-type 链，从自身往上逐层加，直到唯一
+  let node = el;
+  let path = "";
+  for (let i = 0; i < 6 && node && node !== document.body; i++) {
+    const parent = node.parentElement;
+    if (!parent) break;
+    const tag = node.tagName.toLowerCase();
+    let idx = 1;
+    for (const sib of parent.children) {
+      if (sib === node) break;
+      if (sib.tagName.toLowerCase() === tag) idx += 1;
+    }
+    path = `>${tag}:nth-of-type(${idx})` + path;
+    node = parent;
+    const sel = node.tagName.toLowerCase() + path;
+    try {
+      if (document.querySelectorAll(sel).length === 1) return sel;
+    } catch { return null; }
+  }
+  return null;
 }

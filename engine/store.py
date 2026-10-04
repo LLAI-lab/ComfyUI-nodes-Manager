@@ -32,6 +32,7 @@ custom_nodes 目录得到（磁盘上装了什么），两者都用来判断「�
 import copy
 import json
 import os
+import re
 import tempfile
 import threading
 import time
@@ -91,7 +92,30 @@ def config_path():
 def blank():
     """一份空配置。"""
     return {"version": VERSION, "global": dict(GLOBAL_FIELDS),
-            "items": {}, "seen": {}, "plugins": {}}
+            "items": {}, "seen": {}, "plugins": {}, "zones": []}
+
+
+def sanitize_zones(raw):
+    """自定义区域（悬浮卡片等）清单：[{id, label, root}]。
+
+    root 是 CSS 选择器。每条都用限长 + 字符白名单兜底，防止一个坏选择器
+    混进样式渲染把整份 CSS 拖坏（选择器列表里一条非法整条规则失效）。
+    """
+    out = []
+    if not isinstance(raw, list):
+        return out
+    for z in raw[:20]:
+        if not isinstance(z, dict):
+            continue
+        zid = str(z.get("id") or "").strip()[:40]
+        root = str(z.get("root") or "").strip()[:200]
+        if not zid or not root:
+            continue
+        if re.search(r"[<>\{\}\\]", root) or not re.match(r"^[#.:\[\]\w\s\->~+,()*='\"|_-]+$", root):
+            continue
+        out.append({"id": zid, "label": str(z.get("label") or "").strip()[:40] or "悬浮区域",
+                    "root": root})
+    return out
 
 
 def _coerce_num(val, lo, hi, allow_float=False):
@@ -155,6 +179,7 @@ def sanitize(raw):
         for key, val in items.items():
             if isinstance(key, str) and key:
                 cfg["items"][key[:300]] = sanitize_item(val)
+    cfg["zones"] = sanitize_zones(raw.get("zones"))
     seen = raw.get("seen")
     if isinstance(seen, dict):
         for key, val in seen.items():
